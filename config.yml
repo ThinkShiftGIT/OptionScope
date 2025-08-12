@@ -1,0 +1,89 @@
+######################################
+# OptionScope Configuration
+######################################
+
+# Default symbols to track
+symbols:
+  - SPY
+  - QQQ
+
+# Data provider settings
+data_providers:
+  prices:
+    provider: "yfinance"
+    cache_seconds: 60
+  options:
+    provider: "yfinance"
+    cache_seconds: 120
+  volatility:
+    provider: "yfinance"
+    indices:
+      SPY: "^VIX"
+      QQQ: "^VXN"
+  events:
+    provider: "user_input"  # Future: "tradier", "investing", "fred"
+  rates:
+    risk_free_rate: 0.05  # 5% default, configurable
+
+# Mechanical entry rules
+mechanical_rules:
+  term_structure:
+    min_gap: 2.0  # IV points
+    sign: "positive"  # "positive" for long vol, "negative" for short vol
+  iv_rank:
+    min: 30
+    max: 60
+  vix_range:
+    min: 15
+    max: 25
+  atr_width:
+    enabled: true  # ATR < strike width check
+    period: 5  # Wilder's ATR period
+  event_window:
+    enforce: true
+    min_days: 2  # Fail if major event within this many days
+
+# Strategy parameters
+strategy_params:
+  calendars:
+    short_dte_range: [7, 21]
+    long_dte_range: [21, 90]
+    call_put_bias: 0  # 0 = neutral, negative = put bias, positive = call bias
+  diagonals:
+    short_dte_range: [7, 21]
+    long_dte_range: [21, 90]
+    short_delta: [0.20, 0.25]
+    long_delta: [0.35, 0.40]
+  condors_butterflies:
+    dte_range: [21, 60]
+    width_range: [5, 15]
+    body_delta: [0.25, 0.40]
+    wing_delta: [0.10, 0.15]
+  verticals:
+    dte_range: [21, 60]
+    buy_delta: [0.35, 0.40]
+    sell_delta: [0.20, 0.25]
+  ratio_backspread:
+    dte_range: [14, 45]
+    wing_delta: [0.15, 0.35]
+    ratios: [1, 2, 3]  # Ratios to explore
+
+# Scoring weights (must sum to 1.0)
+scoring_weights:
+  probability_of_profit: 0.30
+  expected_return: 0.25
+  capital_efficiency: 0.15
+  max_loss_pct: 0.15  # Negative factor
+  liquidity_penalty: 0.10  # Negative factor
+  event_penalty: 0.05  # Negative factor
+
+# UI settings
+ui:
+  default_equity: 100000  # Default account size for BP calculations
+  strike_width_guardrails: [1, 20]  # Min/max strike width
+  log_path: "trade_log.csv"  # Path to trade log file
+  
+# Developer settings
+dev:
+  debug_mode: false
+  sample_data_path: "tests/sample_data/"  # For offline mode

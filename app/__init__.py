@@ -1,0 +1,3 @@
+"""
+OptionScope main package.
+"""
