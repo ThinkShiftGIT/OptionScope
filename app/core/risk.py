@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from app.core.strategies.base import StrategyCandidate
+from app.utils.config import get_config
 
 
 def calculate_max_loss(candidate: StrategyCandidate) -> float:
@@ -75,6 +76,11 @@ def generate_price_scenario_table(
     Returns:
         DataFrame with scenario analysis results
     """
+    config = get_config()
+    risk_conf = config['risk_scenarios']
+    price_multipliers = risk_conf['price_move_multipliers']
+    iv_changes = risk_conf['iv_changes']
+
     # Generate price points if not provided
     if price_points is None:
         # Calculate 1 and 2 standard deviation moves
@@ -82,13 +88,13 @@ def generate_price_scenario_table(
         std_dev = spot_price * iv * np.sqrt(t)
         
         price_points = [
-            spot_price * 0.7,  # Large down move
+            spot_price * price_multipliers[0],  # Large down move
             spot_price - 2 * std_dev,  # -2σ
             spot_price - std_dev,  # -1σ
             spot_price,  # Unchanged
             spot_price + std_dev,  # +1σ
             spot_price + 2 * std_dev,  # +2σ
-            spot_price * 1.3,  # Large up move
+            spot_price * price_multipliers[1],  # Large up move
         ]
     
     # Create base scenario table
@@ -107,7 +113,6 @@ def generate_price_scenario_table(
     
     # Add IV change scenarios if requested
     if include_iv_scenarios:
-        iv_changes = [-0.05, -0.02, 0.02, 0.05]  # IV changes in percentage points
         for iv_change in iv_changes:
             scenario = {
                 'Scenario': f"IV {iv_change:+.2f}",
@@ -157,24 +162,21 @@ def calculate_liquidity_penalty(candidate: StrategyCandidate) -> float:
     Returns:
         Liquidity penalty score (0-100, higher is worse)
     """
-    # Start with a perfect score
+    config = get_config()
+    penalty_conf = config['liquidity_penalty']
     penalty = 0
     
     # Penalize wide spreads
-    if candidate.avg_spread_pct > 0.05:  # 5% spread
-        penalty += 20
-    elif candidate.avg_spread_pct > 0.03:  # 3% spread
-        penalty += 10
-    elif candidate.avg_spread_pct > 0.01:  # 1% spread
-        penalty += 5
-    
+    for item in penalty_conf['spread_pct']:
+        if candidate.avg_spread_pct > item['threshold']:
+            penalty += item['penalty']
+            break # Apply highest penalty and stop
+
     # Penalize low open interest
-    if candidate.avg_open_interest < 100:
-        penalty += 30
-    elif candidate.avg_open_interest < 500:
-        penalty += 15
-    elif candidate.avg_open_interest < 1000:
-        penalty += 5
+    for item in penalty_conf['open_interest']:
+        if candidate.avg_open_interest < item['threshold']:
+            penalty += item['penalty']
+            break # Apply highest penalty and stop
     
     # Cap at 100
     return min(100, penalty)
@@ -198,16 +200,14 @@ def calculate_event_penalty(
     if days_to_event is None or candidate.dte_short is None:
         return 0
     
+    config = get_config()
+    penalty_conf = config['event_penalty']
+
     # Calculate penalty based on how close the expiration is to the event
     days_buffer = abs(candidate.dte_short - days_to_event)
     
-    if days_buffer <= 1:
-        return 100  # Maximum penalty for expirations very close to events
-    elif days_buffer <= 3:
-        return 75
-    elif days_buffer <= 5:
-        return 50
-    elif days_buffer <= 7:
-        return 25
-    else:
-        return 0  # No penalty if well separated from events
+    for item in penalty_conf['days_buffer']:
+        if days_buffer <= item['threshold']:
+            return item['penalty']
+
+    return 0  # No penalty if well separated from events

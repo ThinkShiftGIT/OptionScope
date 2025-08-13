@@ -44,6 +44,14 @@ mechanical_rules:
     min_days: 2  # Fail if major event within this many days
 
 # Strategy parameters
+strategy_filters:
+  cash_secured_put:
+    delta_range: [-0.35, -0.15]
+    dte_range: [20, 60]
+  covered_call:
+    delta_range: [0.15, 0.35]
+    dte_range: [20, 60]
+
 strategy_params:
   calendars:
     short_dte_range: [7, 21]
@@ -87,3 +95,33 @@ ui:
 dev:
   debug_mode: false
   sample_data_path: "tests/sample_data/"  # For offline mode
+
+# Scoring normalization ranges (0-100 scale)
+scoring_normalization:
+  expected_return: { min: 0, max: 30 }
+  capital_efficiency: { min: 0, max: 0.5 }
+  max_loss_pct: { min: 0, max: 10 }
+
+# Risk scenario parameters
+risk_scenarios:
+  price_move_multipliers: [0.8, 1.2] # Downside and upside multipliers
+  iv_changes: [-0.10, -0.05, 0.05, 0.10] # Percentage point changes
+
+# Liquidity penalty thresholds and points
+liquidity_penalty:
+  spread_pct:
+    - { threshold: 0.05, penalty: 20 }
+    - { threshold: 0.03, penalty: 10 }
+    - { threshold: 0.01, penalty: 5 }
+  open_interest:
+    - { threshold: 100, penalty: 30 }
+    - { threshold: 500, penalty: 15 }
+    - { threshold: 1000, penalty: 5 }
+
+# Event penalty thresholds and points
+event_penalty:
+  days_buffer:
+    - { threshold: 1, penalty: 100 }
+    - { threshold: 3, penalty: 75 }
+    - { threshold: 5, penalty: 50 }
+    - { threshold: 7, penalty: 25 }

@@ -12,7 +12,6 @@ import pandas as pd
 import numpy as np
 
 from app.core.data_providers import create_data_provider
-from app.core.indicators import check_mechanical_rules
 from app.core.strategies.base import StrategyRegistry
 from app.core.risk import calculate_max_loss
 from app.core.scoring import rank_candidates

@@ -19,46 +19,13 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Union, c
 
 import numpy as np
 import pandas as pd
+import streamlit as st
 import yfinance as yf
 from pydantic import BaseModel, Field
 
 from app.utils.config import get_config
 
 
-def timed_cache(seconds: int = 120) -> Callable:
-    """
-    Create a timed cache decorator with a specified expiration time.
-    
-    Args:
-        seconds: Seconds before cached values expire
-        
-    Returns:
-        Callable: Decorator for caching function results
-    """
-    def decorator(func: Callable) -> Callable:
-        # Store cache and timestamps
-        cache: Dict[Any, Any] = {}
-        timestamps: Dict[Any, float] = {}
-        
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # Create a key for the cache based on function arguments
-            key = str(args) + str(kwargs)
-            current_time = time.time()
-            
-            # Check if we have a cached value and if it's still valid
-            if key in cache and current_time - timestamps[key] < seconds:
-                return cache[key]
-            
-            # Call the function and update cache
-            result = func(*args, **kwargs)
-            cache[key] = result
-            timestamps[key] = current_time
-            return result
-        
-        return wrapper
-    
-    return decorator
 
 
 class OptionContract(BaseModel):
@@ -304,7 +271,7 @@ class YFinancePriceProvider(PriceDataProvider):
     def provider_name(self) -> str:
         return "yfinance"
     
-    @timed_cache(seconds=60)
+    @st.cache_data(ttl=60)
     def get_price(self, symbol: str) -> float:
         """Get current price from Yahoo Finance."""
         ticker = yf.Ticker(symbol)
@@ -313,7 +280,7 @@ class YFinancePriceProvider(PriceDataProvider):
             raise ValueError(f"No data found for {symbol}")
         return float(data['Close'].iloc[-1])
     
-    @timed_cache(seconds=300)
+    @st.cache_data(ttl=300)
     def get_ohlc(self, symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
         """Get OHLC data from Yahoo Finance."""
         ticker = yf.Ticker(symbol)
@@ -330,7 +297,7 @@ class YFinanceOptionsProvider(OptionsDataProvider):
     def provider_name(self) -> str:
         return "yfinance"
     
-    @timed_cache(seconds=120)
+    @st.cache_data(ttl=120)
     def get_expirations(self, symbol: str) -> List[datetime]:
         """Get available option expirations from Yahoo Finance."""
         ticker = yf.Ticker(symbol)
@@ -339,7 +306,7 @@ class YFinanceOptionsProvider(OptionsDataProvider):
         # Convert string dates to datetime objects
         return [datetime.strptime(exp_date, '%Y-%m-%d') for exp_date in expiration_dates]
     
-    @timed_cache(seconds=120)
+    @st.cache_data(ttl=120)
     def get_options_chain(self, symbol: str, expiration: datetime) -> OptionsChain:
         """Get options chain from Yahoo Finance."""
         ticker = yf.Ticker(symbol)
@@ -413,7 +380,7 @@ class YFinanceVolatilityProvider(VolatilityDataProvider):
     def provider_name(self) -> str:
         return "yfinance"
     
-    @timed_cache(seconds=120)
+    @st.cache_data(ttl=120)
     def get_index_value(self, symbol: str) -> float:
         """Get current volatility index value from Yahoo Finance."""
         ticker = yf.Ticker(symbol)
@@ -422,7 +389,7 @@ class YFinanceVolatilityProvider(VolatilityDataProvider):
             raise ValueError(f"No data found for volatility index {symbol}")
         return float(data['Close'].iloc[-1])
     
-    @timed_cache(seconds=600)
+    @st.cache_data(ttl=600)
     def get_historical_data(self, symbol: str, period: str = "1y") -> pd.DataFrame:
         """Get historical volatility index data from Yahoo Finance."""
         ticker = yf.Ticker(symbol)
@@ -471,7 +438,7 @@ class ConfigRatesProvider(RatesDataProvider):
         return float(config['data_providers']['rates']['risk_free_rate'])
 
 
-def get_provider(provider_type: DataProviderType) -> DataProvider:
+def create_data_provider(provider_type: DataProviderType) -> DataProvider:
     """
     Factory function to get the appropriate data provider based on configuration.
     

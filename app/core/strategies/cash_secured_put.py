@@ -7,35 +7,30 @@ at the strike price if assigned.
 """
 
 from typing import Any, Dict, List, Set
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
 
 from app.core.strategies.base import (
-    Direction, OptionType, Strategy, StrategyCandidate, 
+    Direction, OptionType, Strategy, StrategyCandidate,
     StrategyRegistry, StrategyType, TradeAction, OptionLeg
 )
+from app.core.data_providers import OptionsChain
+from app.utils.config import get_config
 
 
 @StrategyRegistry.register
 class CashSecuredPutStrategy(Strategy):
     """Cash-Secured Put strategy implementation."""
     
-    @property
-    def name(self) -> str:
-        return "Cash-Secured Put"
-    
-    @property
-    def type(self) -> StrategyType:
-        return StrategyType.BASIC
-    
-    @property
-    def description(self) -> str:
-        return (
-            "A strategy where you sell a put option and set aside enough cash to "
-            "buy shares at the strike price if assigned. Used to generate income "
-            "and potentially acquire shares at a lower price."
-        )
+    name: str = "Cash-Secured Put"
+    type: StrategyType = StrategyType.BASIC
+    description: str = (
+        "A strategy where you sell a put option and set aside enough cash to "
+        "buy shares at the strike price if assigned. Used to generate income "
+        "and potentially acquire shares at a lower price."
+    )
     
     @property
     def directions(self) -> Set[Direction]:
@@ -45,161 +40,73 @@ class CashSecuredPutStrategy(Strategy):
         self,
         symbol: str,
         spot_price: float,
-        iv_surface: pd.DataFrame,
-        dte_range: List[int],
-        delta_targets: Dict[str, List[float]],
-        constraints: Dict[str, Any]
+        options_chain: Dict[str, OptionsChain],
+        risk_free_rate: float,
+        iv: float,
     ) -> List[StrategyCandidate]:
         """
         Generate Cash-Secured Put candidates.
-        
-        Args:
-            symbol: Ticker symbol
-            spot_price: Current spot price
-            iv_surface: DataFrame with IVs indexed by DTE and delta
-            dte_range: List of DTEs to consider
-            delta_targets: Dict mapping leg names to delta targets 
-                          (for CSP, should contain 'put_delta')
-            constraints: Additional constraints for strategy generation
-            
-        Returns:
-            List of CSP strategy candidates
         """
+        config = get_config()
+        filters = config['strategy_filters']['cash_secured_put']
+        delta_range = filters['delta_range']
+        dte_range = filters['dte_range']
+        
         candidates = []
-        
-        # Get put delta targets
-        put_deltas = delta_targets.get('put_delta', [-0.20, -0.25, -0.30])
-        
-        # For each DTE and delta combination, create a candidate
-        for dte in dte_range:
-            for delta in put_deltas:
-                # Skip if this DTE or delta is not in our IV surface
-                if dte not in iv_surface.index or delta not in iv_surface.columns:
+
+        for exp_str, chain in options_chain.items():
+            exp_date = datetime.strptime(exp_str, '%Y-%m-%d')
+            dte = (exp_date - datetime.now()).days
+
+            if not (dte_range[0] <= dte <= dte_range[1]):
+                continue
+                
+            for put in chain.puts:
+                if put.delta is None or put.open_interest is None:
                     continue
-                
-                # Get IV for this DTE and delta
-                iv = iv_surface.loc[dte, delta]
-                if pd.isna(iv):
+
+                if not (delta_range[0] <= put.delta <= delta_range[1]):
                     continue
-                
-                # Calculate strike based on delta (approximate)
-                t = dte / 365.0  # Convert DTE to years
-                std_dev = spot_price * iv * np.sqrt(t)
-                
-                # Approximation: for puts, each 0.1 delta ~= 0.25 std_dev away from ATM
-                delta_factor = abs(delta) * 2.5  # Converts delta to approximate std_dev factor
-                strike = spot_price - (delta_factor * std_dev)
-                
-                # Round strike to nearest 0.5 or 1 depending on price level
-                if spot_price < 50:
-                    strike = round(strike * 2) / 2  # Round to nearest 0.5
-                else:
-                    strike = round(strike)  # Round to nearest 1
-                
-                # Calculate option price (rough approximation)
-                # In real implementation, we would use actual option chain data
-                option_price = self._estimate_option_price(
-                    spot_price, strike, iv, t, OptionType.PUT, TradeAction.SELL
-                )
-                
-                # Create option leg
+
+                # This option is a potential candidate
                 leg = OptionLeg(
                     option_type=OptionType.PUT,
-                    strike=strike,
-                    expiration_date=f"DTE_{dte}",  # Placeholder
+                    strike=put.strike,
+                    expiration_date=exp_str,
                     action=TradeAction.SELL,
                     quantity=1,
-                    delta=delta,
-                    price=option_price
+                    delta=put.delta,
+                    price=put.mid, # Use mid price
                 )
-                
-                # Create candidate
+
                 candidate = StrategyCandidate(
                     symbol=symbol,
                     strategy_name=self.name,
                     legs=[leg],
                     dte_short=dte,
-                    estimated_price=option_price,  # Credit for selling put
-                    buying_power_effect=strike * 100,  # Full strike price in cash
+                    estimated_price=put.mid, # Credit for selling
+                    buying_power_effect=put.strike * 100, # Full strike price in cash
+                    delta=put.delta,
+                    gamma=put.gamma,
+                    theta=put.theta,
+                    vega=put.vega,
+                    avg_spread_pct=(put.ask - put.bid) / put.mid if put.mid > 0 else 0,
+                    avg_open_interest=put.open_interest,
                 )
-                
-                # Calculate probability of profit
-                candidate.probability_of_profit = self.calculate_probability_of_profit(
-                    candidate, spot_price, iv, dte
-                )
-                
-                # Calculate expected return
-                er, scenario_table = self.calculate_expected_return(
-                    candidate, spot_price, iv, dte
-                )
-                candidate.expected_return = er
-                candidate.scenario_table = scenario_table
-                
+
                 # Calculate max profit and loss
-                candidate.max_profit = option_price * 100  # Premium received
-                candidate.max_loss = (strike - option_price) * 100  # Strike minus premium
-                
-                # Add notes
-                candidate.notes = (
-                    f"CSP at {strike:.2f} strike ({abs(delta)*100:.1f}% delta), "
-                    f"{dte} DTE. Premium: ${option_price:.2f} per share."
-                )
-                
+                candidate.max_profit = put.mid * 100
+                candidate.max_loss = (put.strike * 100) - candidate.max_profit
+
+                # Simplified PoP using delta
+                candidate.probability_of_profit = (1 - abs(put.delta)) * 100
+
+                # Simplified Expected Return
+                prob_win = candidate.probability_of_profit / 100
+                prob_lose = 1 - prob_win
+                er = (prob_win * candidate.max_profit) - (prob_lose * candidate.max_loss)
+                candidate.expected_return = (er / candidate.buying_power_effect) * 100 if candidate.buying_power_effect > 0 else 0
+
                 candidates.append(candidate)
-        
+
         return candidates
-    
-    def _estimate_option_price(
-        self,
-        spot: float,
-        strike: float,
-        iv: float,
-        t: float,
-        option_type: OptionType,
-        action: TradeAction
-    ) -> float:
-        """
-        Estimate option price using a simple model.
-        
-        This is a simplified approximation for demonstration purposes.
-        In a real system, we would get actual prices from the options chain.
-        
-        Args:
-            spot: Spot price
-            strike: Strike price
-            iv: Implied volatility
-            t: Time to expiration in years
-            option_type: Call or Put
-            action: Buy or Sell
-            
-        Returns:
-            Estimated option price
-        """
-        # Simple approximation based on intrinsic + time value
-        if option_type == OptionType.CALL:
-            intrinsic = max(0, spot - strike)
-        else:  # PUT
-            intrinsic = max(0, strike - spot)
-        
-        # Time value approximation (very simplified)
-        time_value = spot * iv * np.sqrt(t) * 0.4  # Rough heuristic
-        
-        # Adjust for deep ITM or OTM
-        if option_type == OptionType.CALL:
-            moneyness = spot / strike - 1
-        else:  # PUT
-            moneyness = 1 - spot / strike
-        
-        # Reduce time value for deep ITM/OTM options
-        if moneyness > 0.1 or moneyness < -0.1:
-            time_value *= max(0, 1 - abs(moneyness) * 3)
-        
-        price = intrinsic + time_value
-        
-        # Add a small bid-ask spread
-        if action == TradeAction.BUY:
-            price *= 1.05  # Pay slightly more when buying
-        else:  # SELL
-            price *= 0.95  # Receive slightly less when selling
-        
-        return price

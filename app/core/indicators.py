@@ -18,7 +18,7 @@ import pandas as pd
 
 from app.core.data_providers import (
     DataProviderType, OptionsChain, PriceDataProvider, 
-    OptionsDataProvider, VolatilityDataProvider, get_provider
+    OptionsDataProvider, VolatilityDataProvider, create_data_provider
 )
 
 
@@ -34,7 +34,7 @@ def calculate_atr(symbol: str, period: int = 5) -> float:
         float: ATR value
     """
     # Get price provider and data
-    price_provider = get_provider(DataProviderType.PRICE)
+    price_provider = create_data_provider(DataProviderType.PRICE)
     # Get enough data to calculate ATR
     ohlc = price_provider.get_ohlc(symbol, period="1mo", interval="1d")
     
@@ -69,8 +69,8 @@ def get_atm_iv(symbol: str, target_dte: int) -> float:
         float: ATM implied volatility
     """
     # Get required providers
-    price_provider = get_provider(DataProviderType.PRICE)
-    options_provider = get_provider(DataProviderType.OPTIONS)
+    price_provider = create_data_provider(DataProviderType.PRICE)
+    options_provider = create_data_provider(DataProviderType.OPTIONS)
     
     # Get current price
     spot_price = price_provider.get_price(symbol)
@@ -169,7 +169,7 @@ def calculate_iv_rank(symbol: str) -> float:
         float: IV Rank as a percentage (0-100)
     """
     # Get volatility provider
-    volatility_provider = get_provider(DataProviderType.VOLATILITY)
+    volatility_provider = create_data_provider(DataProviderType.VOLATILITY)
     
     # Map symbol to appropriate volatility index
     vol_indices = {
@@ -262,7 +262,7 @@ def get_vix_level(symbol: str) -> float:
         float: Current volatility index value
     """
     # Get volatility provider
-    volatility_provider = get_provider(DataProviderType.VOLATILITY)
+    volatility_provider = create_data_provider(DataProviderType.VOLATILITY)
     
     # Map symbol to appropriate volatility index
     vol_indices = {
@@ -290,7 +290,7 @@ def get_realized_vol(symbol: str, period_days: int = 30) -> float:
         float: Realized volatility (annualized)
     """
     # Get price provider
-    price_provider = get_provider(DataProviderType.PRICE)
+    price_provider = create_data_provider(DataProviderType.PRICE)
     
     # Get daily close prices
     # Add some buffer to account for weekends and holidays
@@ -413,8 +413,8 @@ def get_iv_surface(
         DataFrame with IV values indexed by DTE and delta
     """
     # Get required providers
-    price_provider = get_provider(DataProviderType.PRICE)
-    options_provider = get_provider(DataProviderType.OPTIONS)
+    price_provider = create_data_provider(DataProviderType.PRICE)
+    options_provider = create_data_provider(DataProviderType.OPTIONS)
     
     # Get current price
     spot_price = price_provider.get_price(symbol)

@@ -109,23 +109,9 @@ class StrategyCandidate:
 class Strategy(ABC):
     """Base class for all options strategies."""
     
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Name of the strategy."""
-        pass
-    
-    @property
-    @abstractmethod
-    def type(self) -> StrategyType:
-        """Type classification of the strategy."""
-        pass
-    
-    @property
-    @abstractmethod
-    def description(self) -> str:
-        """Brief description of the strategy."""
-        pass
+    name: str
+    type: StrategyType
+    description: str
     
     @property
     def directions(self) -> Set[Direction]:
@@ -140,22 +126,20 @@ class Strategy(ABC):
         self,
         symbol: str,
         spot_price: float,
-        iv_surface: pd.DataFrame,
-        dte_range: List[int],
-        delta_targets: Dict[str, List[float]],
-        constraints: Dict[str, Any]
+        options_chain: Dict[str, OptionsChain],
+        risk_free_rate: float,
+        iv: float,
     ) -> List[StrategyCandidate]:
         """
         Generate strategy candidates based on market data and constraints.
-        
+
         Args:
             symbol: Ticker symbol
             spot_price: Current spot price
-            iv_surface: DataFrame with IVs indexed by DTE and delta
-            dte_range: List of DTEs to consider
-            delta_targets: Dict mapping leg names to delta targets
-            constraints: Additional constraints for strategy generation
-            
+            options_chain: Dictionary of options chains, keyed by expiration date string.
+            risk_free_rate: The risk-free rate.
+            iv: The current implied volatility.
+
         Returns:
             List of strategy candidate objects
         """
@@ -355,8 +339,7 @@ class StrategyRegistry:
         Returns:
             The registered strategy class (for decorator use)
         """
-        instance = strategy_class()
-        cls._strategies[instance.name] = strategy_class
+        cls._strategies[strategy_class.name] = strategy_class
         return strategy_class
     
     @classmethod
@@ -401,7 +384,7 @@ class StrategyRegistry:
         return {
             name: strategy_class
             for name, strategy_class in cls._strategies.items()
-            if strategy_class().type == strategy_type
+            if strategy_class.type == strategy_type
         }
 
 

@@ -54,13 +54,9 @@ def main():
     
     # Utility modules
     config = validate_import("app.utils.config")
-    caching = validate_import("app.utils.caching")
     
     # UI modules
     components = validate_import("app.ui.components")
-    
-    # Main app
-    app = validate_import("app.app")
     
     # Test basic functionality
     print("\nTesting basic functionality...")

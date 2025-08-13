@@ -6,6 +6,7 @@ based on multiple objectives, including expected return, probability of profit,
 capital efficiency, and risk factors.
 """
 
+import copy
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -81,12 +82,14 @@ def calculate_composite_score(
     # Probability of Profit (higher is better)
     pop_score = candidate.probability_of_profit
     
+    config = get_config()
+    norm_conf = config['scoring_normalization']
+
     # Expected Return (higher is better)
-    # Normalize to a reasonable range (e.g., 0% to 30%)
     er_score = normalize_value(
         candidate.expected_return,
-        min_value=0,
-        max_value=30,
+        min_value=norm_conf['expected_return']['min'],
+        max_value=norm_conf['expected_return']['max'],
         higher_is_better=True
     )
     
@@ -94,8 +97,8 @@ def calculate_composite_score(
     capital_efficiency = calculate_capital_efficiency(candidate)
     ce_score = normalize_value(
         capital_efficiency,
-        min_value=0,
-        max_value=0.5,  # 0.5% theta per day per BP dollar is excellent
+        min_value=norm_conf['capital_efficiency']['min'],
+        max_value=norm_conf['capital_efficiency']['max'],
         higher_is_better=True
     )
     
@@ -103,8 +106,8 @@ def calculate_composite_score(
     max_loss_pct = calculate_max_loss_percentage(candidate, account_equity)
     ml_score = normalize_value(
         max_loss_pct,
-        min_value=0,
-        max_value=10,  # 10% of account is considered high risk
+        min_value=norm_conf['max_loss_pct']['min'],
+        max_value=norm_conf['max_loss_pct']['max'],
         higher_is_better=False
     )
     
@@ -229,32 +232,50 @@ def get_top_candidates(
     
     # Get top candidates from each category
     top_candidates = []
-    
+    top_candidate_ids = set()
+
+    def get_candidate_id(candidate: StrategyCandidate) -> tuple:
+        """Create a unique identifier for a candidate."""
+        # Sort legs to ensure consistent ordering
+        legs = sorted(candidate.legs, key=lambda l: (l.strike, l.option_type.value))
+        leg_ids = [
+            f"{leg.option_type.value[0]}{leg.strike}{leg.action.value[0]}"
+            for leg in legs
+        ]
+        return (candidate.strategy_name, candidate.dte_short, "".join(leg_ids))
+
     # Add the overall best candidate
-    if ranked and len(ranked) > 0:
-        top_ranked = ranked[0]
-        top_ranked.notes += " (Balanced)"
+    if ranked:
+        top_ranked = copy.copy(ranked[0])
+        top_ranked.notes = "(Balanced)"
         top_candidates.append(top_ranked)
+        top_candidate_ids.add(get_candidate_id(top_ranked))
     
     # Add the top profit-maximizing candidate (if different)
-    if profit_ranked and len(profit_ranked) > 0:
+    if profit_ranked:
         top_profit = profit_ranked[0]
-        if top_profit not in top_candidates:
-            top_profit.notes += " (Profit-Max)"
-            top_candidates.append(top_profit)
+        if get_candidate_id(top_profit) not in top_candidate_ids:
+            top_profit_copy = copy.copy(top_profit)
+            top_profit_copy.notes = "(Profit-Max)"
+            top_candidates.append(top_profit_copy)
+            top_candidate_ids.add(get_candidate_id(top_profit_copy))
     
     # Add the top probability-maximizing candidate (if different)
-    if prob_ranked and len(prob_ranked) > 0:
+    if prob_ranked:
         top_prob = prob_ranked[0]
-        if top_prob not in top_candidates:
-            top_prob.notes += " (PoP-Max)"
-            top_candidates.append(top_prob)
+        if get_candidate_id(top_prob) not in top_candidate_ids:
+            top_prob_copy = copy.copy(top_prob)
+            top_prob_copy.notes = "(PoP-Max)"
+            top_candidates.append(top_prob_copy)
+            top_candidate_ids.add(get_candidate_id(top_prob_copy))
     
     # If we have less than top_n candidates, fill in with the next best overall
     i = 1
     while len(top_candidates) < top_n and i < len(ranked):
-        if ranked[i] not in top_candidates:
-            top_candidates.append(ranked[i])
+        next_best = ranked[i]
+        if get_candidate_id(next_best) not in top_candidate_ids:
+            top_candidates.append(next_best)
+            top_candidate_ids.add(get_candidate_id(next_best))
         i += 1
     
     return top_candidates

@@ -17,7 +17,7 @@ from app.core.risk import (
     calculate_liquidity_penalty,
     calculate_event_penalty
 )
-from app.core.strategies.base import StrategyCandidate, OptionLeg, LegAction, OptionType
+from app.core.strategies.base import StrategyCandidate, OptionLeg, TradeAction, OptionType
 
 
 class TestMaxLossCalculations(unittest.TestCase):
@@ -38,7 +38,7 @@ class TestMaxLossCalculations(unittest.TestCase):
             expected_return=5.0,
             legs=[
                 OptionLeg(
-                    action=LegAction.BUY,
+                    action=TradeAction.BUY,
                     option_type=OptionType.CALL,
                     strike=155.0,
                     expiration_date="2023-06-15",
@@ -50,7 +50,7 @@ class TestMaxLossCalculations(unittest.TestCase):
                     vega=0.2
                 ),
                 OptionLeg(
-                    action=LegAction.SELL,
+                    action=TradeAction.SELL,
                     option_type=OptionType.CALL,
                     strike=160.0,
                     expiration_date="2023-06-15",

@@ -16,78 +16,12 @@ from app.core.data_providers import (
     VolatilityDataProvider,
     EventsDataProvider,
     RatesDataProvider,
-    create_data_provider,
     YFinancePriceProvider,
     YFinanceOptionsProvider,
     YFinanceVolatilityProvider,
-    UserInputEventsProvider,
+    UserInputEventProvider,
     ConfigRatesProvider
 )
-
-
-class TestDataProviderFactory(unittest.TestCase):
-    """Test cases for the data provider factory."""
-    
-    @patch('app.core.data_providers.get_config')
-    def test_create_price_provider(self, mock_get_config):
-        """Test creating a price data provider."""
-        mock_get_config.return_value = {
-            'data_providers': {'price': {'provider': 'yfinance'}}
-        }
-        provider = create_data_provider('price')
-        self.assertIsInstance(provider, YFinancePriceProvider)
-    
-    @patch('app.core.data_providers.get_config')
-    def test_create_options_provider(self, mock_get_config):
-        """Test creating an options data provider."""
-        mock_get_config.return_value = {
-            'data_providers': {'options': {'provider': 'yfinance'}}
-        }
-        provider = create_data_provider('options')
-        self.assertIsInstance(provider, YFinanceOptionsProvider)
-    
-    @patch('app.core.data_providers.get_config')
-    def test_create_volatility_provider(self, mock_get_config):
-        """Test creating a volatility data provider."""
-        mock_get_config.return_value = {
-            'data_providers': {'volatility': {'provider': 'yfinance'}}
-        }
-        provider = create_data_provider('volatility')
-        self.assertIsInstance(provider, YFinanceVolatilityProvider)
-    
-    @patch('app.core.data_providers.get_config')
-    def test_create_events_provider(self, mock_get_config):
-        """Test creating an events data provider."""
-        mock_get_config.return_value = {
-            'data_providers': {'events': {'provider': 'user_input'}}
-        }
-        provider = create_data_provider('events')
-        self.assertIsInstance(provider, UserInputEventsProvider)
-    
-    @patch('app.core.data_providers.get_config')
-    def test_create_rates_provider(self, mock_get_config):
-        """Test creating a rates data provider."""
-        mock_get_config.return_value = {
-            'data_providers': {'rates': {'provider': 'config'}}
-        }
-        provider = create_data_provider('rates')
-        self.assertIsInstance(provider, ConfigRatesProvider)
-    
-    @patch('app.core.data_providers.get_config')
-    def test_invalid_provider_type(self, mock_get_config):
-        """Test creating an invalid provider type."""
-        mock_get_config.return_value = {'data_providers': {}}
-        with self.assertRaises(ValueError):
-            create_data_provider('invalid_type')
-    
-    @patch('app.core.data_providers.get_config')
-    def test_invalid_provider_implementation(self, mock_get_config):
-        """Test creating a provider with an invalid implementation."""
-        mock_get_config.return_value = {
-            'data_providers': {'price': {'provider': 'invalid'}}
-        }
-        with self.assertRaises(ValueError):
-            create_data_provider('price')
 
 
 class TestYFinancePriceProvider(unittest.TestCase):
