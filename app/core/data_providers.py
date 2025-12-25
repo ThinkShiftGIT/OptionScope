@@ -240,8 +240,9 @@ class VolatilityDataProvider(DataProvider):
         """
         pass
 
-
-class EventDataProvider(DataProvider):
+# Renaming to match what is expected in tests/imports if needed,
+# but mostly just fixing the missing EventsDataProvider which was named EventDataProvider
+class EventsDataProvider(DataProvider):
     """Interface for economic and earnings event data providers."""
     
     @property
@@ -262,16 +263,15 @@ class EventDataProvider(DataProvider):
         pass
     
     @abc.abstractmethod
-    def get_economic_events(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    def get_upcoming_events(self, symbol: str) -> Dict[str, Any]:
         """
-        Get economic events within a date range.
+        Get upcoming events for a symbol.
         
         Args:
-            start_date: Start date for the query
-            end_date: End date for the query
-            
+             symbol: The ticker symbol
+
         Returns:
-            DataFrame with economic events
+             Dict with event details
         """
         pass
 
@@ -304,14 +304,27 @@ class YFinancePriceProvider(PriceDataProvider):
     def provider_name(self) -> str:
         return "yfinance"
     
+    def get_price_history(self, symbol: str, days: int = 30) -> pd.DataFrame:
+        """Get price history."""
+        # Alias for get_ohlc but with days argument
+        # Convert days to period string?
+        # Rough approximation
+        return self.get_ohlc(symbol, period=f"{days}d")
+
     @timed_cache(seconds=60)
     def get_price(self, symbol: str) -> float:
         """Get current price from Yahoo Finance."""
         ticker = yf.Ticker(symbol)
-        data = ticker.history(period="1d")
-        if data.empty:
-            raise ValueError(f"No data found for {symbol}")
-        return float(data['Close'].iloc[-1])
+        # get fast price
+        try:
+             # Fast way
+             info = ticker.fast_info
+             return info.last_price
+        except:
+             data = ticker.history(period="1d")
+             if data.empty:
+                 raise ValueError(f"No data found for {symbol}")
+             return float(data['Close'].iloc[-1])
     
     @timed_cache(seconds=300)
     def get_ohlc(self, symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
@@ -320,7 +333,12 @@ class YFinancePriceProvider(PriceDataProvider):
         data = ticker.history(period=period, interval=interval)
         if data.empty:
             raise ValueError(f"No OHLC data found for {symbol}")
-        return data[['Open', 'High', 'Low', 'Close', 'Volume']]
+        # Rename columns to lowercase for consistency if needed, but existing code expects Title Case or lower?
+        # App uses ['close'] lower case in load_market_data: price_data['close'].iloc[-1]
+        # But get_ohlc defined earlier returned Title Case.
+        # Let's standardize on lowercase
+        data.columns = [c.lower() for c in data.columns]
+        return data[['open', 'high', 'low', 'close', 'volume']]
 
 
 class YFinanceOptionsProvider(OptionsDataProvider):
@@ -340,10 +358,17 @@ class YFinanceOptionsProvider(OptionsDataProvider):
         return [datetime.strptime(exp_date, '%Y-%m-%d') for exp_date in expiration_dates]
     
     @timed_cache(seconds=120)
-    def get_options_chain(self, symbol: str, expiration: datetime) -> OptionsChain:
-        """Get options chain from Yahoo Finance."""
+    def get_options_chain(self, symbol: str, expiration: datetime = None) -> OptionsChain:
+        """Get options chain from Yahoo Finance. If expiration is None, gets nearest."""
         ticker = yf.Ticker(symbol)
-        exp_str = expiration.strftime('%Y-%m-%d')
+
+        if expiration is None:
+             if not ticker.options:
+                 raise ValueError(f"No options found for {symbol}")
+             exp_str = ticker.options[0]
+             expiration = datetime.strptime(exp_str, '%Y-%m-%d')
+        else:
+             exp_str = expiration.strftime('%Y-%m-%d')
         
         # Get the options data
         try:
@@ -413,14 +438,36 @@ class YFinanceVolatilityProvider(VolatilityDataProvider):
     def provider_name(self) -> str:
         return "yfinance"
     
+    def get_iv_history(self, symbol: str, days: int = 252) -> pd.DataFrame:
+        """Get IV history."""
+        # Map symbol to volatility index
+        vol_indices = {
+            'SPY': '^VIX',
+            'QQQ': '^VXN'
+        }
+        vol_index = vol_indices.get(symbol, '^VIX') # Default to VIX
+        return self.get_historical_data(vol_index, period=f"{days}d")
+
     @timed_cache(seconds=120)
     def get_index_value(self, symbol: str) -> float:
         """Get current volatility index value from Yahoo Finance."""
+        # If symbol passed is not an index but a ticker, try to map it
+        if not symbol.startswith('^'):
+             vol_indices = {
+                'SPY': '^VIX',
+                'QQQ': '^VXN'
+            }
+             symbol = vol_indices.get(symbol, '^VIX')
+
         ticker = yf.Ticker(symbol)
-        data = ticker.history(period="1d")
-        if data.empty:
-            raise ValueError(f"No data found for volatility index {symbol}")
-        return float(data['Close'].iloc[-1])
+        try:
+             info = ticker.fast_info
+             return info.last_price
+        except:
+             data = ticker.history(period="1d")
+             if data.empty:
+                 raise ValueError(f"No data found for volatility index {symbol}")
+             return float(data['Close'].iloc[-1])
     
     @timed_cache(seconds=600)
     def get_historical_data(self, symbol: str, period: str = "1y") -> pd.DataFrame:
@@ -429,10 +476,12 @@ class YFinanceVolatilityProvider(VolatilityDataProvider):
         data = ticker.history(period=period)
         if data.empty:
             raise ValueError(f"No historical data found for volatility index {symbol}")
-        return data[['Close']]
+        # Lowercase columns
+        data.columns = [c.lower() for c in data.columns]
+        return data[['close']]
 
 
-class UserInputEventProvider(EventDataProvider):
+class UserInputEventsProvider(EventsDataProvider):
     """User input implementation of EventDataProvider."""
     
     @property
@@ -447,6 +496,10 @@ class UserInputEventProvider(EventDataProvider):
         # In a real implementation, this would retrieve from Streamlit session state
         # For now, we'll just return None
         return None
+
+    def get_upcoming_events(self, symbol: str) -> Dict[str, Any]:
+         """Placeholder."""
+         return {'days_to_event': None}
     
     def get_economic_events(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
         """
@@ -457,6 +510,8 @@ class UserInputEventProvider(EventDataProvider):
         # For now, we'll just return an empty DataFrame with the right structure
         return pd.DataFrame(columns=['Date', 'Event', 'Importance', 'Expected', 'Actual'])
 
+# Alias for compatibility with tests if they use UserInputEventProvider
+UserInputEventProvider = UserInputEventsProvider
 
 class ConfigRatesProvider(RatesDataProvider):
     """Configuration-based implementation of RatesDataProvider."""
@@ -471,29 +526,77 @@ class ConfigRatesProvider(RatesDataProvider):
         return float(config['data_providers']['rates']['risk_free_rate'])
 
 
-def get_provider(provider_type: DataProviderType) -> DataProvider:
+def create_data_provider(provider_type_str: str) -> DataProvider:
     """
     Factory function to get the appropriate data provider based on configuration.
     
     Args:
-        provider_type: Type of data provider to create
+        provider_type_str: Type of data provider to create (string)
         
     Returns:
         DataProvider: Implementation of the requested provider type
     """
-    config = get_config()
-    provider_name = config['data_providers'][provider_type.value]['provider']
     
+    try:
+        provider_type = DataProviderType(provider_type_str)
+    except ValueError:
+        # Map simple strings if they don't match exactly
+        mapping = {
+            'price': DataProviderType.PRICE,
+            'options': DataProviderType.OPTIONS,
+            'volatility': DataProviderType.VOLATILITY,
+            'events': DataProviderType.EVENTS,
+            'rates': DataProviderType.RATES
+        }
+        provider_type = mapping.get(provider_type_str)
+        if not provider_type:
+            raise ValueError(f"Invalid provider type: {provider_type_str}")
+
+    config = get_config()
+    # Check if provider config exists, if not use default
+    if provider_type.value in config['data_providers']:
+        provider_name = config['data_providers'][provider_type.value]['provider']
+    else:
+        # Fallback to defaults
+        if provider_type == DataProviderType.PRICE: provider_name = 'yfinance'
+        elif provider_type == DataProviderType.OPTIONS: provider_name = 'yfinance'
+        elif provider_type == DataProviderType.VOLATILITY: provider_name = 'yfinance'
+        elif provider_type == DataProviderType.EVENTS: provider_name = 'user_input'
+        elif provider_type == DataProviderType.RATES: provider_name = 'config'
+        else: provider_name = 'yfinance'
+
+    # Lazy import to avoid circular dependency issues if any
+    from app.core.providers.public_provider import PublicPriceProvider
+
+    # Handle provider instantiation safely
     providers = {
-        (DataProviderType.PRICE, "yfinance"): YFinancePriceProvider(),
-        (DataProviderType.OPTIONS, "yfinance"): YFinanceOptionsProvider(),
-        (DataProviderType.VOLATILITY, "yfinance"): YFinanceVolatilityProvider(),
-        (DataProviderType.EVENTS, "user_input"): UserInputEventProvider(),
-        (DataProviderType.RATES, "config"): ConfigRatesProvider(),
+        (DataProviderType.PRICE, "yfinance"): YFinancePriceProvider, # Class not instance
+        (DataProviderType.PRICE, "public"): PublicPriceProvider,
+        (DataProviderType.OPTIONS, "yfinance"): YFinanceOptionsProvider,
+        (DataProviderType.VOLATILITY, "yfinance"): YFinanceVolatilityProvider,
+        (DataProviderType.EVENTS, "user_input"): UserInputEventsProvider,
+        (DataProviderType.RATES, "config"): ConfigRatesProvider,
     }
     
-    provider = providers.get((provider_type, provider_name))
-    if provider is None:
-        raise ValueError(f"No {provider_type.value} provider found with name '{provider_name}'")
+    provider_cls = providers.get((provider_type, provider_name))
     
-    return provider
+    if provider_cls:
+        try:
+            return provider_cls()
+        except ValueError:
+            # Fallback if init fails (e.g. missing credentials for Public)
+            if provider_name == "public":
+                print("Public.com provider failed to init, falling back to yfinance")
+                return YFinancePriceProvider()
+            raise
+
+    # Fallback logic if config asks for something we don't have
+    if provider_name == "public" and provider_type == DataProviderType.PRICE:
+         # Try instantiating anyway? No, already checked map.
+         # Just fallback to YFinance
+         return YFinancePriceProvider()
+
+    raise ValueError(f"No {provider_type.value} provider found with name '{provider_name}'")
+
+# Alias for backward compatibility if needed
+get_provider = create_data_provider

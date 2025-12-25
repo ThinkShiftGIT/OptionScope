@@ -108,6 +108,10 @@ class StrategyCandidate:
 
 class Strategy(ABC):
     """Base class for all options strategies."""
+
+    def __init__(self, config: Dict[str, Any] = None):
+        """Initialize the strategy with configuration."""
+        self.config = config or {}
     
     @property
     @abstractmethod
@@ -355,7 +359,9 @@ class StrategyRegistry:
         Returns:
             The registered strategy class (for decorator use)
         """
-        instance = strategy_class()
+        # We need to instantiate with a dummy config to get properties
+        # This is a bit of a hack, but works for the registry pattern
+        instance = strategy_class({})
         cls._strategies[instance.name] = strategy_class
         return strategy_class
     
@@ -401,7 +407,7 @@ class StrategyRegistry:
         return {
             name: strategy_class
             for name, strategy_class in cls._strategies.items()
-            if strategy_class().type == strategy_type
+            if strategy_class({}).type == strategy_type
         }
 
 

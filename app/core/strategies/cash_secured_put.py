@@ -74,11 +74,11 @@ class CashSecuredPutStrategy(Strategy):
         for dte in dte_range:
             for delta in put_deltas:
                 # Skip if this DTE or delta is not in our IV surface
-                if dte not in iv_surface.index or delta not in iv_surface.columns:
+                if dte not in iv_surface.index:
                     continue
                 
                 # Get IV for this DTE and delta
-                iv = iv_surface.loc[dte, delta]
+                iv = self._get_iv_for_delta(iv_surface, dte, delta)
                 if pd.isna(iv):
                     continue
                 
@@ -87,8 +87,43 @@ class CashSecuredPutStrategy(Strategy):
                 std_dev = spot_price * iv * np.sqrt(t)
                 
                 # Approximation: for puts, each 0.1 delta ~= 0.25 std_dev away from ATM
-                delta_factor = abs(delta) * 2.5  # Converts delta to approximate std_dev factor
-                strike = spot_price - (delta_factor * std_dev)
+                # This is a rough approx, Black-Scholes inversion would be better
+                # But for this simulation, we use a simple Z-score approximation
+                # Delta -0.5 is ATM. Delta -0.2 is OTM (Strike < Spot).
+                # N^-1(0.2) is approx -0.84.
+                # So Z score is approx N^-1(|delta|) if we assume simplified model
+                # But put delta is N(d1) - 1.
+                # Let's stick to the existing simple approximation for now but improve it slightly
+
+                # Z-score approximation
+                # For Put delta = N(d1) - 1. So N(d1) = 1 + delta.
+                # If delta is -0.2, N(d1) = 0.8. Z ~ 0.84.
+                # Strike = Spot * exp(-Z * sigma * sqrt(T)) roughly
+                # But here z_score is derived from delta where delta = N(d1) - 1.
+                # If delta = -0.2, 1+delta = 0.8. norm.ppf(0.8) ~= 0.84 (positive).
+                # Since we want OTM put (Strike < Spot), we need a negative exponent if formula is Spot * exp(Z...).
+                # So we should use a negative sign if z_score is positive.
+                # Or just realize z_score represents distance from mean. OTM put is "below" mean.
+
+                from scipy.stats import norm
+                try:
+                    # For Put, N(d1) - 1 = delta  => N(d1) = 1 + delta
+                    # d1 = norm.ppf(1 + delta)
+                    # d1 approx (ln(S/K) + ...) / sigma*sqrt(t)
+                    # if delta is -0.2 (OTM), d1 is > 0 (0.84). This implies S > K.
+                    # ln(S/K) > 0 => S/K > 1 => S > K. Correct.
+                    # So Strike K = S / exp(d1 * sigma * sqrt(t)) approx?
+                    # If K = S * exp(Z), then Z must be negative for OTM put.
+                    # Let's just force OTM logic: Strike < Spot.
+                    # If z_score comes out positive (0.84), we negate it to get Strike < Spot.
+
+                    z_score = norm.ppf(1 + delta)
+                    if z_score > 0:
+                        z_score = -z_score
+                except:
+                    z_score = -1.0
+
+                strike = spot_price * np.exp(z_score * iv * np.sqrt(t))
                 
                 # Round strike to nearest 0.5 or 1 depending on price level
                 if spot_price < 50:
@@ -149,6 +184,16 @@ class CashSecuredPutStrategy(Strategy):
         
         return candidates
     
+    def _get_iv_for_delta(self, surface: pd.DataFrame, dte: int, delta: float) -> float:
+        """Find the closest delta in the IV surface."""
+        if delta in surface.columns:
+            return surface.loc[dte, delta]
+
+        # Find closest available delta
+        available_deltas = surface.columns
+        closest = min(available_deltas, key=lambda x: abs(x - delta))
+        return surface.loc[dte, closest]
+
     def _estimate_option_price(
         self,
         spot: float,
@@ -191,7 +236,7 @@ class CashSecuredPutStrategy(Strategy):
             moneyness = 1 - spot / strike
         
         # Reduce time value for deep ITM/OTM options
-        if moneyness > 0.1 or moneyness < -0.1:
+        if abs(moneyness) > 0.1:
             time_value *= max(0, 1 - abs(moneyness) * 3)
         
         price = intrinsic + time_value
