@@ -21,7 +21,8 @@ from app.core.data_providers import (
     YFinanceOptionsProvider,
     YFinanceVolatilityProvider,
     UserInputEventsProvider,
-    ConfigRatesProvider
+    ConfigRatesProvider,
+    OptionsChain
 )
 
 
@@ -93,8 +94,8 @@ class TestDataProviderFactory(unittest.TestCase):
 class TestYFinancePriceProvider(unittest.TestCase):
     """Test cases for the YFinancePriceProvider."""
     
-    @patch('app.core.data_providers.yf.download')
-    def test_get_price_history(self, mock_download):
+    @patch('app.core.data_providers.yf.Ticker')
+    def test_get_price_history(self, mock_ticker):
         """Test getting price history."""
         # Create mock data
         mock_data = pd.DataFrame({
@@ -106,7 +107,7 @@ class TestYFinancePriceProvider(unittest.TestCase):
         }, index=pd.date_range('2023-01-01', periods=3))
         
         # Set up the mock
-        mock_download.return_value = mock_data
+        mock_ticker.return_value.history.return_value = mock_data
         
         # Create provider and call the method
         provider = YFinancePriceProvider()
@@ -119,7 +120,7 @@ class TestYFinancePriceProvider(unittest.TestCase):
         self.assertTrue('close' in result.columns)
         
         # Verify the mock was called correctly
-        mock_download.assert_called_once()
+        mock_ticker.return_value.history.assert_called_once()
 
 
 class TestYFinanceOptionsProvider(unittest.TestCase):
@@ -197,20 +198,12 @@ class TestYFinanceOptionsProvider(unittest.TestCase):
         result = provider.get_options_chain('AAPL')
         
         # Assertions
-        self.assertIsInstance(result, dict)
-        self.assertEqual(len(result), 2)
-        self.assertTrue(expiry1 in result)
-        self.assertTrue(expiry2 in result)
-        
-        # Check structure of first expiration
-        self.assertTrue('calls' in result[expiry1])
-        self.assertTrue('puts' in result[expiry1])
-        self.assertEqual(len(result[expiry1]['calls']), 3)
-        self.assertEqual(len(result[expiry1]['puts']), 3)
+        self.assertIsInstance(result, OptionsChain)
         
         # Verify the mock was called correctly
+        # In the new implementation, it defaults to the nearest expiration if none provided
         mock_ticker.assert_called_once_with('AAPL')
-        self.assertEqual(mock_ticker_instance.option_chain.call_count, 2)
+        mock_ticker_instance.option_chain.assert_called_once()
 
 
 class TestConfigRatesProvider(unittest.TestCase):

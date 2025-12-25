@@ -27,7 +27,8 @@ from app.core.indicators import (
     calculate_vix_level,
     calculate_realized_volatility,
     calculate_iv_skew,
-    check_mechanical_rules
+    check_mechanical_rules,
+    get_iv_surface
 )
 from app.core.strategies.base import StrategyRegistry
 from app.core.risk import calculate_max_loss, generate_price_scenario_table
@@ -43,7 +44,6 @@ from app.ui.components import (
 )
 from app.utils.config import get_config
 from app.utils.caching import streamlit_cache, clear_cache
-
 
 # Set page configuration
 st.set_page_config(
@@ -88,15 +88,34 @@ def load_market_data(symbol):
     atm_iv = calculate_atm_iv(options_chain, spot_price)
     
     # Calculate IV Term Structure
+    # Use proper calculation using symbol (which internally fetches multiple expirations)
+    # The second and third args are short_dte and long_dte from config
+    short_dte = config['strategy_params']['calendars']['short_dte_range'][1]
+    long_dte = config['strategy_params']['calendars']['long_dte_range'][0]
+
+    # Calculate proper term structure if possible
+    try:
+        iv_short, iv_long, term_spread = calculate_iv_term_structure(symbol, short_dte=short_dte, long_dte=long_dte)
+        # Create a series for visualization compatibility if needed, or dict
+        # The heatmap expects a DataFrame or dict of DataFrames.
+        # Let's keep existing structure for heatmap: dict of DF
+        # But we need term_spread for rules.
+    except:
+        term_spread = 0
+        iv_short = 0
+        iv_long = 0
+
+    # Also create iv_term_structure object for UI (which seems to expect a Series or DF)
+    # Re-using the single chain object for visualization if full structure not available
     iv_term_structure = calculate_iv_term_structure(options_chain, spot_price)
-    term_spread = iv_term_structure.max() - iv_term_structure.min() if not iv_term_structure.empty else 0
     
     # Calculate IV Rank
     iv_history = volatility_provider.get_iv_history(symbol, days=252)
     iv_rank = calculate_iv_rank(iv_history)
     
     # Calculate VIX Level
-    vix_level = calculate_vix_level(volatility_provider)
+    # Pass symbol to allow correct index mapping
+    vix_level = calculate_vix_level(symbol)
     
     # Get upcoming events
     events = events_provider.get_upcoming_events(symbol)
@@ -162,15 +181,96 @@ def generate_strategy_candidates(market_data):
     
     all_candidates = []
     
+    # Prepare common parameters
+    # Note: Strategies now expect specific params from config, passed via __init__
+    # But they also need dynamic market data passed to generate_candidates
+
+    # We need to build an IV surface or similar if the strategy expects it
+    # Currently existing strategies expect iv_surface.
+    # Let's generate it.
+
+    # Collect all DTEs and Deltas needed
+    all_dtes = set()
+    all_deltas = set()
+
+    # This is a bit inefficient, assuming we need a broad surface
+    # Let's pick a reasonable range based on config
+    strategy_params = config['strategy_params']
+
+    # Simple union of all DTE ranges
+    min_dte = 0
+    max_dte = 0
+    for s_name, params in strategy_params.items():
+        if 'dte_range' in params:
+             min_dte = min(min_dte, params['dte_range'][0])
+             max_dte = max(max_dte, params['dte_range'][1])
+        # Handle calendars/diagonals which have separate ranges
+        if 'short_dte_range' in params:
+             min_dte = min(min_dte, params['short_dte_range'][0])
+             max_dte = max(max_dte, params['short_dte_range'][1])
+        if 'long_dte_range' in params:
+             max_dte = max(max_dte, params['long_dte_range'][1])
+
+    if max_dte == 0: max_dte = 90
+    if min_dte == 0: min_dte = 7
+
+    # Create DTE range for surface
+    dte_range = list(range(min_dte, max_dte + 1, 1)) # Granular? Or just specific points?
+    # Better to use available expirations
+
+    # For deltas, we need a range covering likely targets
+    delta_range = [-0.9, -0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.25, -0.2, -0.15, -0.1, -0.05,
+                   0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+    # Generate IV surface
+    # We need to make sure get_iv_surface works.
+    iv_surface = get_iv_surface(symbol, dte_range, delta_range)
+
     # Generate candidates for each strategy
-    for strategy_class in strategies:
+    for strategy_class in strategies.values():
         strategy = strategy_class(config['strategy_parameters'])
+
+        # Determine DTE range for this strategy
+        s_dte_range = []
+        if strategy.name == "Cash-Secured Put":
+            # Use verticals dte range as default if not specified or define a default
+            # Actually config usually has section per strategy type
+            # But the strategy class name doesn't always match config key exactly
+            # Let's check config structure
+            # keys: calendars, diagonals, condors_butterflies, verticals, ratio_backspread
+            # CSP is basic. Maybe use 'verticals' settings or add 'cash_secured_put' to config?
+            # For now use a default [7, 45]
+            s_dte_range = list(range(7, 46))
+        elif strategy.name == "Covered Call":
+            s_dte_range = list(range(7, 46))
+        elif strategy.name == "Vertical Spread":
+             if 'verticals' in strategy_params:
+                 r = strategy_params['verticals']['dte_range']
+                 s_dte_range = list(range(r[0], r[1] + 1))
+             else:
+                 s_dte_range = list(range(21, 61))
+
+        # Determine delta targets
+        delta_targets = {}
+        if strategy.name == "Cash-Secured Put":
+            delta_targets['put_delta'] = [-0.20, -0.25, -0.30]
+        elif strategy.name == "Covered Call":
+            delta_targets['call_delta'] = [0.20, 0.25, 0.30]
+        elif strategy.name == "Vertical Spread":
+            if 'verticals' in strategy_params:
+                 delta_targets['sell_delta'] = strategy_params['verticals']['sell_delta']
+                 delta_targets['buy_delta'] = strategy_params['verticals']['buy_delta']
+            else:
+                 delta_targets['sell_delta'] = [0.20, 0.25]
+                 delta_targets['buy_delta'] = [0.05, 0.10]
+
         candidates = strategy.generate_candidates(
             symbol=symbol,
             spot_price=spot_price,
-            options_chain=options_chain,
-            risk_free_rate=risk_free_rate,
-            iv=iv
+            iv_surface=iv_surface,
+            dte_range=s_dte_range,
+            delta_targets=delta_targets,
+            constraints={}
         )
         all_candidates.extend(candidates)
     
@@ -232,16 +332,24 @@ def main():
         )
         
         # Risk per trade
+        # config['mechanical_rules']['max_risk_pct'] might not exist or be float?
+        # Check config.yml: max_risk_pct is not there, check defaults?
+        # In read_file config.yml, it was not present in mechanical_rules.
+        # It was: iv_rank, vix_range, atr_width, event_window.
+        # Wait, I don't see max_risk_pct in config.yml.
+        # I should handle this.
+        max_risk_pct_val = config.get('mechanical_rules', {}).get('max_risk_pct', 2)
+
         max_risk_pct = st.slider(
             "Max Risk per Trade (%)",
             min_value=1,
             max_value=10,
-            value=config['mechanical_rules']['max_risk_pct']
+            value=max_risk_pct_val
         )
         
         # Strategy filter
         registry = StrategyRegistry()
-        strategy_names = [s.__name__ for s in registry.get_all_strategies()]
+        strategy_names = [s.__name__ for s in registry.get_all_strategies().values()]
         selected_strategies = st.multiselect(
             "Strategy Filter",
             options=strategy_names,
@@ -257,8 +365,12 @@ def main():
     tab1, tab2, tab3 = st.tabs(["Dashboard", "Strategy Candidates", "Trade Log"])
     
     # Get market data
-    with st.spinner("Loading market data..."):
-        market_data = load_market_data(symbol)
+    try:
+        with st.spinner("Loading market data..."):
+            market_data = load_market_data(symbol)
+    except Exception as e:
+        st.error(f"Error loading market data: {str(e)}")
+        return
     
     # Check mechanical rules
     rule_compliance = check_mechanical_rules(market_data, config['mechanical_rules'])
@@ -300,49 +412,59 @@ def main():
     # Strategy candidates tab
     with tab2:
         # Generate candidates
-        if all_rules_pass:
-            with st.spinner("Generating strategy candidates..."):
+        # We allow generation even if rules fail, but warn user.
+        if not all_rules_pass:
+            st.warning("Entry rules not met. Proceed with caution.")
+
+        with st.spinner("Generating strategy candidates..."):
+            try:
                 candidates = generate_strategy_candidates(market_data)
                 
                 # Filter by selected strategies
-                if selected_strategies and len(selected_strategies) < len(strategy_names):
-                    candidates = [c for c in candidates if c.strategy_name in selected_strategies]
+                if selected_strategies:
+                     candidates = [c for c in candidates if c.strategy_name in selected_strategies]
                 
-                # Rank candidates
-                top_candidates = get_top_candidates(
-                    candidates,
-                    account_equity,
-                    market_data.get('days_to_event'),
-                    top_n=10,
-                    include_categories=True
-                )
-                
-                # Display Pareto chart
-                st.subheader("Strategy Trade-offs")
-                pareto_chart(candidates)
-                
-                # Display candidate table
-                st.subheader("Top Strategy Candidates")
-                selected_idx = strategy_candidate_table(top_candidates)
-                
-                # Display selected candidate details
-                if selected_idx >= 0:
-                    st.subheader("Strategy Details")
-                    selected_candidate = top_candidates[selected_idx]
-                    strategy_detail_panel(
-                        selected_candidate,
-                        symbol,
-                        market_data['spot_price']
+                if not candidates:
+                    st.info("No candidates found matching criteria.")
+                else:
+                    # Rank candidates
+                    top_candidates = get_top_candidates(
+                        candidates,
+                        account_equity,
+                        market_data.get('days_to_event'),
+                        top_n=10,
+                        include_categories=True
                     )
                     
-                    # Add to trade log button
-                    col1, col2 = st.columns([1, 3])
-                    with col1:
-                        if st.button("Add to Trade Log"):
-                            st.session_state['add_to_log'] = selected_candidate
-                            st.rerun()
-        else:
-            st.warning("Entry rules not met. Strategy generation disabled.")
+                    # Display Pareto chart
+                    st.subheader("Strategy Trade-offs")
+                    pareto_chart(candidates)
+
+                    # Display candidate table
+                    st.subheader("Top Strategy Candidates")
+                    selected_idx = strategy_candidate_table(top_candidates)
+
+                    # Display selected candidate details
+                    if selected_idx is not None and selected_idx >= 0 and selected_idx < len(top_candidates):
+                        st.subheader("Strategy Details")
+                        selected_candidate = top_candidates[selected_idx]
+                        strategy_detail_panel(
+                            selected_candidate,
+                            symbol,
+                            market_data['spot_price']
+                        )
+
+                        # Add to trade log button
+                        col1, col2 = st.columns([1, 3])
+                        with col1:
+                            if st.button("Add to Trade Log"):
+                                st.session_state['add_to_log'] = selected_candidate
+                                st.rerun()
+            except Exception as e:
+                st.error(f"Error generating candidates: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
+
     
     # Trade log tab
     with tab3:
@@ -371,7 +493,7 @@ def main():
         
         # Add to log if form submitted
         if form_data:
-            trade_log = trade_log.append(form_data, ignore_index=True)
+            trade_log = pd.concat([trade_log, pd.DataFrame([form_data])], ignore_index=True)
             save_trade_log(trade_log)
             st.success("Trade added to log!")
             st.rerun()

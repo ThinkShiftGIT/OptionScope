@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Set
 
 import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
 from app.core.strategies.base import (
     Direction, OptionType, Strategy, StrategyCandidate, 
@@ -73,21 +74,57 @@ class CoveredCallStrategy(Strategy):
         for dte in dte_range:
             for delta in call_deltas:
                 # Skip if this DTE or delta is not in our IV surface
-                if dte not in iv_surface.index or delta not in iv_surface.columns:
+                if dte not in iv_surface.index:
                     continue
                 
                 # Get IV for this DTE and delta
-                iv = iv_surface.loc[dte, delta]
+                iv = self._get_iv_for_delta(iv_surface, dte, delta)
                 if pd.isna(iv):
                     continue
                 
                 # Calculate strike based on delta (approximate)
                 t = dte / 365.0  # Convert DTE to years
-                std_dev = spot_price * iv * np.sqrt(t)
                 
-                # Approximation: for calls, each 0.1 delta ~= 0.25 std_dev away from ATM
-                delta_factor = delta * 2.5  # Converts delta to approximate std_dev factor
-                strike = spot_price + (delta_factor * std_dev)
+                # Z-score approximation
+                try:
+                    z_score = norm.ppf(delta) # for Call OTM delta is < 0.5 usually?
+                    # If delta is 0.2 (20 delta call), it is OTM. N(d1) = 0.2? No.
+                    # N(d1) is delta. OTM call has low delta.
+                    # If delta is 0.2, then Z is roughly -0.84.
+                    # But for Call Strike > Spot.
+                    # Wait, N(d1) is probability of finishing ITM roughly.
+                    # If N(d1) = 0.2, then Strike is above Spot.
+                    # So Z score should be positive?
+                    # d1 = (ln(S/K) + ...) / sigma sqrt(T).
+                    # If S < K, ln(S/K) is negative.
+                    # So d1 is negative.
+                    # N(d1) < 0.5.
+
+                    # My previous logic for CSP was: N(d1) - 1 = -0.2 => N(d1) = 0.8 => d1 > 0 => S > K. Put is OTM. Correct.
+
+                    # For Call: N(d1) = 0.2 => d1 < 0 => S < K. Call is OTM. Correct.
+                    # So if delta is 0.2, z_score is negative.
+                    # Strike = Spot * exp(-sigma * sqrt(T) * z_score).
+                    # Actually d1 = (ln(S/K) + 0.5v^2T) / v sqrt(T)
+                    # z_score = d1
+                    # z_score * v sqrt(T) = ln(S/K) + ...
+                    # ln(K/S) = -z_score * v sqrt(T) ...
+                    # K = S * exp(...)
+                    pass
+                except:
+                    pass
+
+                # Approximation: Strike = Spot * (1 + sigma * sqrt(T) * inverse_normal(1-delta))
+                # If delta 0.20, we want strike s.t. Prob(ITM) = 0.20.
+                # It means it's on the right tail.
+                # No, standard delta for calls is 0 to 1. 0.20 delta is OTM.
+                # So we want strike > spot.
+                # The 'z-score' distance from mean is roughly norm.ppf(1-delta).
+                # e.g. delta 0.16 => z approx 1.
+                # Strike approx Spot * (1 + iv * sqrt(t))
+
+                z_dist = norm.ppf(1 - delta)
+                strike = spot_price * (1 + z_dist * iv * np.sqrt(t))
                 
                 # Round strike to nearest 0.5 or 1 depending on price level
                 if spot_price < 50:
@@ -160,6 +197,16 @@ class CoveredCallStrategy(Strategy):
         
         return candidates
     
+    def _get_iv_for_delta(self, surface: pd.DataFrame, dte: int, delta: float) -> float:
+        """Find the closest delta in the IV surface."""
+        if delta in surface.columns:
+            return surface.loc[dte, delta]
+
+        # Find closest available delta
+        available_deltas = surface.columns
+        closest = min(available_deltas, key=lambda x: abs(x - delta))
+        return surface.loc[dte, closest]
+
     def _estimate_option_price(
         self,
         spot: float,
@@ -202,7 +249,7 @@ class CoveredCallStrategy(Strategy):
             moneyness = 1 - spot / strike
         
         # Reduce time value for deep ITM/OTM options
-        if moneyness > 0.1 or moneyness < -0.1:
+        if abs(moneyness) > 0.1:
             time_value *= max(0, 1 - abs(moneyness) * 3)
         
         price = intrinsic + time_value

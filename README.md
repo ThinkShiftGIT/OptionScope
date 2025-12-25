@@ -35,7 +35,7 @@ poetry env use 3.11
 poetry install
 
 # Run the application
-poetry run streamlit run app/app_trade_entry.py
+poetry run streamlit run app/app.py
 ```
 
 ### Development Commands
